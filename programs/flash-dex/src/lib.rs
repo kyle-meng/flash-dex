@@ -74,19 +74,25 @@ pub mod flash_dex {
             (reserve_b, reserve_a)
         };
 
-        // Mathematically safe fee calculation using checked operations
-        // Output = [AmountInWithFee * ReserveOut] / [ReserveIn * 10000 + AmountInWithFee]
+        // Mathematically safe fee calculation
         let fee_multiplier = 10000u64.checked_sub(ctx.accounts.pool.fee_bps as u64).unwrap();
         let amount_in_with_fee = amount_in.checked_mul(fee_multiplier).unwrap();
 
-        let numerator = amount_in_with_fee.checked_mul(reserve_out).unwrap();
-        let denominator = reserve_in
+        // Use u128 for intermediate calculations to prevent overflow with large reserves
+        let amount_in_with_fee_u128 = amount_in_with_fee as u128;
+        let reserve_out_u128 = reserve_out as u128;
+        let reserve_in_u128 = reserve_in as u128;
+
+        let numerator = amount_in_with_fee_u128.checked_mul(reserve_out_u128).unwrap();
+        let denominator = reserve_in_u128
             .checked_mul(10000)
             .unwrap()
-            .checked_add(amount_in_with_fee)
+            .checked_add(amount_in_with_fee_u128)
             .unwrap();
 
-        let amount_out = numerator.checked_div(denominator).unwrap();
+        let amount_out_u128 = numerator.checked_div(denominator).unwrap();
+        let amount_out = amount_out_u128 as u64;
+
         require!(amount_out >= min_out, DexError::SlippageExceeded);
 
         let cpi_program = ctx.accounts.token_program.to_account_info();

@@ -5,15 +5,34 @@ import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import { motion, AnimatePresence } from "framer-motion";
 import { Activity, ArrowRightLeft, Zap, ShieldCheck, History, XCircle, CheckCircle, Droplets, Settings, Plus, Repeat } from "lucide-react";
+import { useProgram, PROGRAM_ID } from "@/hooks/useProgram";
+import { BN } from "@coral-xyz/anchor";
+import { 
+  PublicKey, 
+  SystemProgram, 
+  Transaction, 
+  SYSVAR_INSTRUCTIONS_PUBKEY 
+} from "@solana/web3.js";
+import { 
+  TOKEN_PROGRAM_ID, 
+  getAssociatedTokenAddressSync, 
+  createAssociatedTokenAccountInstruction,
+  getAccount
+} from "@solana/spl-token";
 
 type TabOption = "arbitrage" | "swap" | "pool";
 
 export default function Home() {
   const { connection } = useConnection();
-  const { publicKey } = useWallet();
+  const { publicKey, sendTransaction } = useWallet();
+  const program = useProgram();
   
   // Tab State
   const [activeTab, setActiveTab] = useState<TabOption>("arbitrage");
+
+  // Mint Addresses (Defaults for Devnet testing if user has some)
+  const [mintA, setMintA] = useState<string>("");
+  const [mintB, setMintB] = useState<string>("");
 
   // Form States
   const [loanAmount, setLoanAmount] = useState<number>(10000);
@@ -29,37 +48,129 @@ export default function Home() {
   };
 
   const executeArbitrage = async () => {
-    if (!publicKey) return addLog("Please connect your wallet first.", "error");
+    if (!publicKey || !program) return addLog("Please connect your wallet first.", "error");
     setIsExecuting(true);
-    addLog(`Initiating flash loan of ${loanAmount.toLocaleString()} USDC...`, "info");
+    addLog(`Initiating real flash loan of ${loanAmount.toLocaleString()} tokens...`, "info");
     try {
-      await new Promise(r => setTimeout(r, 800));
-      addLog("Flash Borrow Index(0): Success. Fund secured.", "success");
-      await new Promise(r => setTimeout(r, 800));
-      addLog("Triggering inner DEX CPI routing for arbitrage...", "info");
-      await new Promise(r => setTimeout(r, 800));
-      addLog("Arbitrage profitable. Extracted surplus liquidity.", "success");
-      await new Promise(r => setTimeout(r, 800));
-      addLog("Flash Repay Index(N): Instruction Introspection authenticated.", "success");
-      addLog("Transaction confirmed on-chain! Profit booked. ⚡️", "success");
+      if (!mintA || !mintB) throw new Error("Please provide Mint A and Mint B addresses in the Pool tab.");
+      
+      const mintAPubkey = new PublicKey(mintA);
+      const mintBPubkey = new PublicKey(mintB);
+      
+      const [poolAddress] = PublicKey.findProgramAddressSync(
+        [Buffer.from("pool"), mintAPubkey.toBuffer(), mintBPubkey.toBuffer()], 
+        program.programId
+      );
+      
+      const [vaultA] = PublicKey.findProgramAddressSync(
+        [poolAddress.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mintAPubkey.toBuffer()],
+        new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL") // Associated Token Program
+      );
+      const [vaultB] = PublicKey.findProgramAddressSync(
+        [poolAddress.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mintBPubkey.toBuffer()],
+        new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL")
+      );
+      
+      const userA = getAssociatedTokenAddressSync(mintAPubkey, publicKey);
+      const userB = getAssociatedTokenAddressSync(mintBPubkey, publicKey);
+
+      const amount = new BN(loanAmount);
+      
+      addLog("Building Introspection TX [Borrow -> Repay]...", "info");
+      
+      const borrowIx = await program.methods
+        .flashBorrow(amount, true) // Borrow Token A
+        .accounts({
+          pool: poolAddress,
+          vaultA: vaultA,
+          vaultB: vaultB,
+          userTokenA: userA,
+          userTokenB: userB,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          instructions: SYSVAR_INSTRUCTIONS_PUBKEY,
+        })
+        .instruction();
+
+      const repayIx = await program.methods
+        .flashRepay(amount, true) // Repay Token A
+        .accounts({
+          pool: poolAddress,
+          vaultA: vaultA,
+          vaultB: vaultB,
+          userTokenA: userA,
+          userTokenB: userB,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          instructions: SYSVAR_INSTRUCTIONS_PUBKEY,
+        })
+        .instruction();
+
+      const tx = new Transaction().add(borrowIx, repayIx);
+      const signature = await sendTransaction(tx, connection);
+      
+      addLog(`TX Sent: ${signature.slice(0, 8)}...`, "info");
+      await connection.confirmTransaction(signature, "confirmed");
+      
+      addLog("Transaction confirmed! Profit booked. ⚡️", "success");
     } catch (error: any) {
-      addLog(`Arbitrage failed: ${error.message || "Unknown error"}`, "error");
+      console.error(error);
+      addLog(`Arbitrage failed: ${error.message}`, "error");
     } finally {
       setIsExecuting(false);
     }
   };
 
   const executeInitialization = async () => {
-    if (!publicKey) return addLog("Please connect your wallet first.", "error");
+    if (!publicKey || !program) return addLog("Please connect your wallet first.", "error");
+    if (!mintA || !mintB) return addLog("Please provide both Mint A and Mint B addresses.", "error");
+
     setIsExecuting(true);
-    addLog("Building PDA coordinates for Token Pair...", "info");
+    addLog("Building PDA coordinates [V2]...", "info");
     try {
-      await new Promise(r => setTimeout(r, 800));
-      addLog("Deriving Vault PDAs [vault_a, vault_b] for the pool.", "info");
-      await new Promise(r => setTimeout(r, 800));
-      addLog("Initializing core Master Pool Account with 30 BPS fee.", "success");
-      addLog("Pool created on-chain! You can now deposit liquidity.", "success");
+      const mintAPubkey = new PublicKey(mintA);
+      const mintBPubkey = new PublicKey(mintB);
+
+      const [poolAddress] = PublicKey.findProgramAddressSync(
+        [Buffer.from("pool"), mintAPubkey.toBuffer(), mintBPubkey.toBuffer()],
+        program.programId
+      );
+
+      // Derive Associated Token Vaults for the pool
+      const [vaultA] = PublicKey.findProgramAddressSync(
+        [poolAddress.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mintAPubkey.toBuffer()],
+        new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL")
+      );
+      const [vaultB] = PublicKey.findProgramAddressSync(
+        [poolAddress.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mintBPubkey.toBuffer()],
+        new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL")
+      );
+
+      console.log("Initialization Accounts:", {
+        pool: poolAddress.toBase58(),
+        tokenAMint: mintAPubkey.toBase58(),
+        tokenBMint: mintBPubkey.toBase58(),
+        vaultA: vaultA.toBase58(),
+        vaultB: vaultB.toBase58(),
+        payer: publicKey.toBase58(),
+      });
+
+      const tx = await program.methods
+        .initializePool(30, 10)
+        .accounts({
+          pool: poolAddress,
+          tokenAMint: mintAPubkey,
+          tokenBMint: mintBPubkey,
+          vaultA: vaultA,
+          vaultB: vaultB,
+          payer: publicKey,
+          systemProgram: SystemProgram.programId,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"),
+        } as any)
+        .rpc();
+
+      addLog(`Pool initialized! Sig: ${tx.slice(0, 8)}`, "success");
     } catch (error: any) {
+      console.error("InitializePool Error:", error);
       addLog(`Init failed: ${error.message}`, "error");
     } finally {
       setIsExecuting(false);
@@ -67,16 +178,48 @@ export default function Home() {
   };
 
   const executeDeposit = async () => {
-    if (!publicKey) return addLog("Please connect your wallet first.", "error");
+    if (!publicKey || !program) return addLog("Please connect your wallet first.", "error");
+    if (!mintA || !mintB) return addLog("Please provide token mints.", "error");
+    
     setIsExecuting(true);
-    addLog(`Initiating dual-sided deposit (${depositAmountA} A / ${depositAmountB} B)...`, "info");
+    addLog("Dual-sided deposit starting [Real Tx]...", "info");
     try {
-      await new Promise(r => setTimeout(r, 800));
-      addLog(`Transferring ${depositAmountA} Token A to Vault A...`, "info");
-      addLog(`Transferring ${depositAmountB} Token B to Vault B...`, "info");
-      await new Promise(r => setTimeout(r, 800));
-      addLog("Liquidity deposited. Equivalent LP shares locked.", "success");
+      const mintAPubkey = new PublicKey(mintA);
+      const mintBPubkey = new PublicKey(mintB);
+
+      const [poolAddress] = PublicKey.findProgramAddressSync(
+        [Buffer.from("pool"), mintAPubkey.toBuffer(), mintBPubkey.toBuffer()], 
+        program.programId
+      );
+
+      const [vaultA] = PublicKey.findProgramAddressSync(
+        [poolAddress.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mintAPubkey.toBuffer()],
+        new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL")
+      );
+      const [vaultB] = PublicKey.findProgramAddressSync(
+        [poolAddress.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mintBPubkey.toBuffer()],
+        new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL")
+      );
+
+      const userA = getAssociatedTokenAddressSync(mintAPubkey, publicKey);
+      const userB = getAssociatedTokenAddressSync(mintBPubkey, publicKey);
+
+      const tx = await program.methods
+        .deposit(new BN(depositAmountA), new BN(depositAmountB))
+        .accounts({
+          user: publicKey,
+          pool: poolAddress,
+          userTokenA: userA,
+          userTokenB: userB,
+          vaultA: vaultA,
+          vaultB: vaultB,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        } as any)
+        .rpc();
+
+      addLog(`Deposit successful! Sig: ${tx.slice(0, 8)}`, "success");
     } catch (error: any) {
+      console.error(error);
       addLog(`Deposit failed: ${error.message}`, "error");
     } finally {
       setIsExecuting(false);
@@ -84,18 +227,48 @@ export default function Home() {
   };
 
   const executeSwap = async () => {
-    if (!publicKey) return addLog("Please connect your wallet first.", "error");
+    if (!publicKey || !program) return addLog("Please connect your wallet first.", "error");
+    if (!mintA || !mintB) return addLog("Please provide token mints.", "error");
+
     setIsExecuting(true);
-    addLog(`Initiating AMM Trade: Swapping ${swapAmountIn} Token A...`, "info");
+    addLog(`Swapping ${swapAmountIn} tokens...`, "info");
     try {
-      await new Promise(r => setTimeout(r, 800));
-      addLog("Executing safe math CFMM product formulation...", "info");
-      addLog("Direct vault read initiated to prevent proxy-read vulnerabilities.", "info");
-      await new Promise(r => setTimeout(r, 1000));
-      addLog("User -> Vault A Transfer successful.", "success");
-      addLog("Vault B -> User CPI Transfer successful.", "success");
-      addLog("Swap operation confirmed on-chain! 📈", "success");
+      const mintAPubkey = new PublicKey(mintA);
+      const mintBPubkey = new PublicKey(mintB);
+
+      const [poolAddress] = PublicKey.findProgramAddressSync(
+        [Buffer.from("pool"), mintAPubkey.toBuffer(), mintBPubkey.toBuffer()], 
+        program.programId
+      );
+
+      const [vaultA] = PublicKey.findProgramAddressSync(
+        [poolAddress.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mintAPubkey.toBuffer()],
+        new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL")
+      );
+      const [vaultB] = PublicKey.findProgramAddressSync(
+        [poolAddress.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mintBPubkey.toBuffer()],
+        new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL")
+      );
+
+      const userA = getAssociatedTokenAddressSync(mintAPubkey, publicKey);
+      const userB = getAssociatedTokenAddressSync(mintBPubkey, publicKey);
+
+      const tx = await program.methods
+        .swap(new BN(swapAmountIn), new BN(0), true) // Default A -> B, 0 min out
+        .accounts({
+          user: publicKey,
+          pool: poolAddress,
+          userTokenA: userA,
+          userTokenB: userB,
+          vaultA: vaultA,
+          vaultB: vaultB,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        } as any)
+        .rpc();
+
+      addLog(`Swap confirmed! Sig: ${tx.slice(0, 8)}`, "success");
     } catch (error: any) {
+      console.error(error);
       addLog(`Swap failed: ${error.message}`, "error");
     } finally {
       setIsExecuting(false);
@@ -213,6 +386,14 @@ export default function Home() {
               <div className="p-4 bg-white/5 border border-white/10 rounded-2xl space-y-4">
                 <div className="flex justify-between items-center"><h4 className="text-sm font-semibold tracking-wider text-white/80"><Settings className="w-4 h-4 inline mr-2 text-white/40"/> Admin Setup</h4></div>
                 <button onClick={executeInitialization} disabled={isExecuting} className="w-full bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 py-3 rounded-xl font-bold text-sm transition-all">Initialize New Pool PDA</button>
+              </div>
+
+              <div className="p-4 bg-white/5 border border-white/10 rounded-2xl space-y-4">
+                <div className="flex justify-between items-center"><h4 className="text-sm font-semibold tracking-wider text-white/80"><Settings className="w-4 h-4 inline mr-2 text-white/40"/> Token Config</h4></div>
+                <div className="space-y-3">
+                  <input placeholder="Mint A Address" value={mintA} onChange={e => setMintA(e.target.value)} className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-2 text-xs font-mono text-white/70 focus:outline-none focus:border-emerald-500/50"/>
+                  <input placeholder="Mint B Address" value={mintB} onChange={e => setMintB(e.target.value)} className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-2 text-xs font-mono text-white/70 focus:outline-none focus:border-emerald-500/50"/>
+                </div>
               </div>
 
               <div className="p-4 bg-white/5 border border-white/10 rounded-2xl space-y-4">

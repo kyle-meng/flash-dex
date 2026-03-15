@@ -10,8 +10,10 @@ import { PhantomWalletAdapter } from "@solana/wallet-adapter-wallets";
 import "@solana/wallet-adapter-react-ui/styles.css";
 
 export function WalletProvider({ children }: { children: React.ReactNode }) {
-  // Use localnet or devnet endpoint. Devnet is standard for showcase.
-  const endpoint = "http://127.0.0.1:8899";
+  // Configured to Devnet as per production readiness flow
+  const endpoint = "https://api.devnet.solana.com";
+  // const endpoint = "http://localhost:8899";
+
   
   const wallets = useMemo(() => [new PhantomWalletAdapter()], []);
 

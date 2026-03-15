@@ -2,7 +2,9 @@
   "license": "ISC",
   "scripts": {
     "lint:fix": "prettier */*.js \"*/**/*{.js,.ts}\" -w",
-    "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check"
+    "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check",
+    "test:bankrun":"npx ts-mocha tests/flash-dex.ts",
+    "test:devnet": "npx ts-node tests/devnet-test.ts"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.1",
