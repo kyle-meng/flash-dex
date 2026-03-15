@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import { motion, AnimatePresence } from "framer-motion";
@@ -27,12 +27,16 @@ export default function Home() {
   const { publicKey, sendTransaction } = useWallet();
   const program = useProgram();
   
-  // Tab State
   const [activeTab, setActiveTab] = useState<TabOption>("arbitrage");
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // Mint Addresses (Defaults for Devnet testing if user has some)
-  const [mintA, setMintA] = useState<string>("");
-  const [mintB, setMintB] = useState<string>("");
+  const [mintA, setMintA] = useState<string>("GKdgP7W5cPMgvH7pptqAZyUcgruSJmFyQhbGbp4SZdcb");
+  const [mintB, setMintB] = useState<string>("A4axmCec6CpupCrGVjHSYiz3xoXf8LjifRMEdg638hGY");
 
   // Form States
   const [loanAmount, setLoanAmount] = useState<number>(10000);
@@ -105,15 +109,36 @@ export default function Home() {
         .instruction();
 
       const tx = new Transaction().add(borrowIx, repayIx);
+      
+      addLog("Fetching fresh blockhash & simulating...", "info");
+      
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
+      tx.recentBlockhash = blockhash;
+      tx.feePayer = publicKey;
+
       const signature = await sendTransaction(tx, connection);
       
-      addLog(`TX Sent: ${signature.slice(0, 8)}...`, "info");
-      await connection.confirmTransaction(signature, "confirmed");
+      addLog(`TX Sent: ${signature.slice(0, 8)}... Waiting confirmation.`, "info");
+      await connection.confirmTransaction({
+        signature,
+        blockhash,
+        lastValidBlockHeight
+      }, "confirmed");
       
       addLog("Transaction confirmed! Profit booked. ⚡️", "success");
     } catch (error: any) {
-      console.error(error);
-      addLog(`Arbitrage failed: ${error.message}`, "error");
+      console.error("Arbitrage detailed error:", error);
+      
+      // Attempt to extract logs from simulation failure
+      if (error.logs) {
+        console.log("On-chain Logs:", error.logs);
+        const mustBeFirst = error.logs.some((l: string) => l.includes("MustBeFirst"));
+        if (mustBeFirst) {
+          addLog("Failed: flash_borrow must be the FIRST instruction. (Wallet might have added skip-priority instructions)", "error");
+        }
+      }
+      
+      addLog(`Arbitrage failed: ${error.message || "Execution error"}`, "error");
     } finally {
       setIsExecuting(false);
     }
@@ -453,7 +478,7 @@ export default function Home() {
           </div>
 
           <div className="[&_.wallet-adapter-button]:bg-white/10 [&_.wallet-adapter-button]:hover:bg-white/20 [&_.wallet-adapter-button]:transition-all [&_.wallet-adapter-button]:rounded-xl [&_.wallet-adapter-button]:border [&_.wallet-adapter-button]:border-white/10">
-            <WalletMultiButton />
+            {mounted && <WalletMultiButton />}
           </div>
         </div>
       </nav>
