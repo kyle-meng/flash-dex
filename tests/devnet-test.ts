@@ -62,101 +62,101 @@ async function main() {
   console.log("Vault A:", vaultA.toBase58());
   console.log("Vault B:", vaultB.toBase58());
 
-  // // 4. Initialize Pool (if not already done)
-  // try {
-  //   const poolAccount = await program.account.pool.fetch(poolPda);
-  //   console.log("✅ Pool already exists. Skipping initialization.");
-  // } catch (e) {
-  //   console.log("🔨 Initializing Pool...");
-  //   const tx = await program.methods
-  //     .initializePool(30, 5) // 30 bps fee, 5 bps protocol fee
-  //     .accounts({
-  //       pool: poolPda,
-  //       tokenAMint: tokenAMint,
-  //       tokenBMint: tokenBMint,
-  //       vaultA,
-  //       vaultB,
-  //       payer: provider.publicKey,
-  //       systemProgram: SystemProgram.programId,
-  //       tokenProgram: TOKEN_PROGRAM_ID,
-  //       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-  //     } as any)
-  //     .rpc();
-  //   console.log("🚀 Pool Initialized. Signature:", tx);
-  // }
+  // 4. Initialize Pool (if not already done)
+  try {
+    const poolAccount = await program.account.pool.fetch(poolPda);
+    console.log("✅ Pool already exists. Skipping initialization.");
+  } catch (e) {
+    console.log("🔨 Initializing Pool...");
+    const tx = await program.methods
+      .initializePool(30, 5) // 30 bps fee, 5 bps protocol fee
+      .accounts({
+        pool: poolPda,
+        tokenAMint: tokenAMint,
+        tokenBMint: tokenBMint,
+        vaultA,
+        vaultB,
+        payer: provider.publicKey,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+      } as any)
+      .rpc();
+    console.log("🚀 Pool Initialized. Signature:", tx);
+  }
 
-  // // 5. Deposit 100 Tokens to each side
-  // // Ensure you have balance!
-  // console.log("💰 Depositing liquidity...");
-  // const userTokenA_depositAmount = new BN(400_000_000_000_000); // 0.1 tokens if 9 decimals
-  // const userTokenB_depositAmount = new BN(500_000_000_000_000); // 0.1 tokens if 9 decimals
+  // 5. Deposit 100 Tokens to each side
+  // Ensure you have balance!
+  console.log("💰 Depositing liquidity...");
+  const userTokenA_depositAmount = new BN(400_000_000_000_000); // 0.1 tokens if 9 decimals
+  const userTokenB_depositAmount = new BN(500_000_000_000_000); // 0.1 tokens if 9 decimals
 
-  // try {
-  //   const depositTx = await program.methods
-  //     .deposit(userTokenA_depositAmount, userTokenB_depositAmount)
-  //     .accounts({
-  //       user: provider.publicKey,
-  //       pool: poolPda,
-  //       userTokenA,
-  //       userTokenB,
-  //       vaultA,
-  //       vaultB,
-  //       tokenProgram: TOKEN_PROGRAM_ID,
-  //     } as any)
-  //     .rpc();
-  //   console.log("✅ Deposit successful. Signature:", depositTx);
-  // } catch (error: any) {
-  //   console.error("❌ Deposit failed:", error.logs ? error.logs : error.message);
-  // }
+  try {
+    const depositTx = await program.methods
+      .deposit(userTokenA_depositAmount, userTokenB_depositAmount)
+      .accounts({
+        user: provider.publicKey,
+        pool: poolPda,
+        userTokenA,
+        userTokenB,
+        vaultA,
+        vaultB,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      } as any)
+      .rpc();
+    console.log("✅ Deposit successful. Signature:", depositTx);
+  } catch (error: any) {
+    console.error("❌ Deposit failed:", error.logs ? error.logs : error.message);
+  }
 
-  // // 6. Flash Loan Test (Borrow -> Repay)
-  // console.log("⚡️ Executing Flash Loan [Borrow -> Repay]...");
-  // const borrowAmount = new BN(10_000_000); // 0.01 tokens
-  // const borrowFee = borrowAmount.mul(new BN(1)).div(new BN(1000)); // 0.1% fee
-  // const requiredRepay = borrowAmount.add(borrowFee);
+  // 6. Flash Loan Test (Borrow -> Repay)
+  console.log("⚡️ Executing Flash Loan [Borrow -> Repay]...");
+  const borrowAmount = new BN(10_000_000); // 0.01 tokens
+  const borrowFee = borrowAmount.mul(new BN(1)).div(new BN(1000)); // 0.1% fee
+  const requiredRepay = borrowAmount.add(borrowFee);
 
-  // const borrowIx = await program.methods
-  //   .flashBorrow(borrowAmount, true) // isTokenA
-  //   .accounts({
-  //     user: provider.publicKey,
-  //     pool: poolPda,
-  //     userTokenA,
-  //     userTokenB,
-  //     vaultA,
-  //     vaultB,
-  //     tokenProgram: TOKEN_PROGRAM_ID,
-  //     instructions: SYSVAR_INSTRUCTIONS_PUBKEY,
-  //   } as any)
-  //   .instruction();
+  const borrowIx = await program.methods
+    .flashBorrow(borrowAmount, true) // isTokenA
+    .accounts({
+      user: provider.publicKey,
+      pool: poolPda,
+      userTokenA,
+      userTokenB,
+      vaultA,
+      vaultB,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      instructions: SYSVAR_INSTRUCTIONS_PUBKEY,
+    } as any)
+    .instruction();
 
-  // const repayIx = await program.methods
-  //   .flashRepay(requiredRepay, true)
-  //   .accounts({
-  //     user: provider.publicKey,
-  //     pool: poolPda,
-  //     userTokenA,
-  //     userTokenB,
-  //     vaultA,
-  //     vaultB,
-  //     tokenProgram: TOKEN_PROGRAM_ID,
-  //     instructions: SYSVAR_INSTRUCTIONS_PUBKEY,
-  //   } as any)
-  //   .instruction();
+  const repayIx = await program.methods
+    .flashRepay(requiredRepay, true)
+    .accounts({
+      user: provider.publicKey,
+      pool: poolPda,
+      userTokenA,
+      userTokenB,
+      vaultA,
+      vaultB,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      instructions: SYSVAR_INSTRUCTIONS_PUBKEY,
+    } as any)
+    .instruction();
 
-  // const flashTx = new Transaction().add(borrowIx, repayIx);
-  // try {
-  //   const signature = await anchor.web3.sendAndConfirmTransaction(provider.connection, flashTx, [payer]);
-  //   console.log("✅ Flash Loan successful! Signature:", signature);
-  // } catch (error: any) {
-  //   console.error("❌ Flash Loan failed:", error.logs ? error.logs : error.message);
-  // }
+  const flashTx = new Transaction().add(borrowIx, repayIx);
+  try {
+    const signature = await anchor.web3.sendAndConfirmTransaction(provider.connection, flashTx, [payer]);
+    console.log("✅ Flash Loan successful! Signature:", signature);
+  } catch (error: any) {
+    console.error("❌ Flash Loan failed:", error.logs ? error.logs : error.message);
+  }
 
 
   // 7. Swap Test
   console.log("Swap Token");
-  const isAToB = true;
+  const isAToB = false;
   const swapIx = await program.methods
-    .swap(new BN(10), new BN(0), isAToB)
+    .swap(new BN(100_000_000_000), new BN(0), isAToB)
     .accounts({
       user: provider.publicKey,
       pool: poolPda,
