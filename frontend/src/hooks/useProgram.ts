@@ -4,6 +4,8 @@ import { Program, AnchorProvider, Idl } from '@coral-xyz/anchor';
 import { PublicKey } from '@solana/web3.js';
 import idl from '../idl/flash_dex.json';
 
+import { FlashDex } from '../idl/flash_dex';
+
 export const PROGRAM_ID = new PublicKey("9zwMoRvs4hfzLZ5PLWxVB1AJ8bkpDWXYdzcjBqmSZQG7");
 
 export function useProgram() {
@@ -19,7 +21,7 @@ export function useProgram() {
       AnchorProvider.defaultOptions()
     );
 
-    return new Program(idl as Idl, provider);
+    return new Program<FlashDex>(idl as any, provider);
   }, [connection, wallet]);
 
   return program;
