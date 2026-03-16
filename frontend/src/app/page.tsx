@@ -17,10 +17,15 @@ import {
   TOKEN_PROGRAM_ID, 
   getAssociatedTokenAddressSync, 
   createAssociatedTokenAccountInstruction,
-  getAccount
+  getAccount,
+  ASSOCIATED_TOKEN_PROGRAM_ID
 } from "@solana/spl-token";
+import { ComputeBudgetProgram } from "@solana/web3.js";
 
 type TabOption = "arbitrage" | "swap" | "pool";
+
+const DECIMALS = 9;
+const FACTOR = new BN(10).pow(new BN(DECIMALS));
 
 export default function Home() {
   const { connection } = useConnection();
@@ -45,6 +50,7 @@ export default function Home() {
   const [depositAmountB, setDepositAmountB] = useState<number>(500);
 
   const [isExecuting, setIsExecuting] = useState(false);
+  const [isAToB, setIsAToB] = useState(true);
   const [logs, setLogs] = useState<{ id: number; message: string; type: "info" | "success" | "error" }[]>([]);
 
   const addLog = (message: string, type: "info" | "success" | "error" = "info") => {
@@ -58,6 +64,7 @@ export default function Home() {
     try {
       if (!mintA || !mintB) throw new Error("Please provide Mint A and Mint B addresses in the Pool tab.");
       
+      addLog("Building Introspection TX [Borrow -> Repay]...", "info");
       const mintAPubkey = new PublicKey(mintA);
       const mintBPubkey = new PublicKey(mintB);
       
@@ -68,23 +75,26 @@ export default function Home() {
       
       const [vaultA] = PublicKey.findProgramAddressSync(
         [poolAddress.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mintAPubkey.toBuffer()],
-        new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL") // Associated Token Program
+        ASSOCIATED_TOKEN_PROGRAM_ID
       );
       const [vaultB] = PublicKey.findProgramAddressSync(
         [poolAddress.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mintBPubkey.toBuffer()],
-        new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL")
+        ASSOCIATED_TOKEN_PROGRAM_ID
       );
       
       const userA = getAssociatedTokenAddressSync(mintAPubkey, publicKey);
       const userB = getAssociatedTokenAddressSync(mintBPubkey, publicKey);
 
-      const amount = new BN(loanAmount);
-      
-      addLog("Building Introspection TX [Borrow -> Repay]...", "info");
-      
+      const amount = new BN(loanAmount).mul(FACTOR);
+      // Calculate 0.1% fee: repay = amount + (amount / 1000)
+      const repayAmount = amount.add(amount.div(new BN(1000)));
+
+      addLog(`Flash Loan: Borrowing ${loanAmount.toLocaleString()} tokens...`, "info");
+
       const borrowIx = await program.methods
         .flashBorrow(amount, true) // Borrow Token A
         .accounts({
+          user: publicKey,
           pool: poolAddress,
           vaultA: vaultA,
           vaultB: vaultB,
@@ -92,12 +102,13 @@ export default function Home() {
           userTokenB: userB,
           tokenProgram: TOKEN_PROGRAM_ID,
           instructions: SYSVAR_INSTRUCTIONS_PUBKEY,
-        })
+        } as any)
         .instruction();
 
       const repayIx = await program.methods
-        .flashRepay(amount, true) // Repay Token A
+        .flashRepay(repayAmount, true) // Repay Token A
         .accounts({
+          user: publicKey,
           pool: poolAddress,
           vaultA: vaultA,
           vaultB: vaultB,
@@ -105,10 +116,22 @@ export default function Home() {
           userTokenB: userB,
           tokenProgram: TOKEN_PROGRAM_ID,
           instructions: SYSVAR_INSTRUCTIONS_PUBKEY,
-        })
+        } as any)
         .instruction();
 
-      const tx = new Transaction().add(borrowIx, repayIx);
+      // Add Compute Budget to avoid simulation failures and ensure priority
+      const modifyComputeUnits = ComputeBudgetProgram.setComputeUnitLimit({ 
+        units: 400_000 
+      });
+      const addPriorityFee = ComputeBudgetProgram.setComputeUnitPrice({ 
+        microLamports: 10_000 
+      });
+
+      const tx = new Transaction()
+        .add(modifyComputeUnits)
+        .add(addPriorityFee)
+        .add(borrowIx)
+        .add(repayIx);
       
       addLog("Fetching fresh blockhash & simulating...", "info");
       
@@ -162,11 +185,11 @@ export default function Home() {
       // Derive Associated Token Vaults for the pool
       const [vaultA] = PublicKey.findProgramAddressSync(
         [poolAddress.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mintAPubkey.toBuffer()],
-        new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL")
+        ASSOCIATED_TOKEN_PROGRAM_ID
       );
       const [vaultB] = PublicKey.findProgramAddressSync(
         [poolAddress.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mintBPubkey.toBuffer()],
-        new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL")
+        ASSOCIATED_TOKEN_PROGRAM_ID
       );
 
       console.log("Initialization Accounts:", {
@@ -189,7 +212,7 @@ export default function Home() {
           payer: publicKey,
           systemProgram: SystemProgram.programId,
           tokenProgram: TOKEN_PROGRAM_ID,
-          associatedTokenProgram: new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"),
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
         } as any)
         .rpc();
 
@@ -219,18 +242,18 @@ export default function Home() {
 
       const [vaultA] = PublicKey.findProgramAddressSync(
         [poolAddress.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mintAPubkey.toBuffer()],
-        new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL")
+        ASSOCIATED_TOKEN_PROGRAM_ID
       );
       const [vaultB] = PublicKey.findProgramAddressSync(
         [poolAddress.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mintBPubkey.toBuffer()],
-        new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL")
+        ASSOCIATED_TOKEN_PROGRAM_ID
       );
 
       const userA = getAssociatedTokenAddressSync(mintAPubkey, publicKey);
       const userB = getAssociatedTokenAddressSync(mintBPubkey, publicKey);
 
       const tx = await program.methods
-        .deposit(new BN(depositAmountA), new BN(depositAmountB))
+        .deposit(new BN(depositAmountA).mul(FACTOR), new BN(depositAmountB).mul(FACTOR))
         .accounts({
           user: publicKey,
           pool: poolAddress,
@@ -256,7 +279,7 @@ export default function Home() {
     if (!mintA || !mintB) return addLog("Please provide token mints.", "error");
 
     setIsExecuting(true);
-    addLog(`Swapping ${swapAmountIn} tokens...`, "info");
+    addLog(`Swapping ${swapAmountIn.toLocaleString()} tokens...`, "info");
     try {
       const mintAPubkey = new PublicKey(mintA);
       const mintBPubkey = new PublicKey(mintB);
@@ -268,18 +291,18 @@ export default function Home() {
 
       const [vaultA] = PublicKey.findProgramAddressSync(
         [poolAddress.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mintAPubkey.toBuffer()],
-        new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL")
+        ASSOCIATED_TOKEN_PROGRAM_ID
       );
       const [vaultB] = PublicKey.findProgramAddressSync(
         [poolAddress.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mintBPubkey.toBuffer()],
-        new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL")
+        ASSOCIATED_TOKEN_PROGRAM_ID
       );
 
       const userA = getAssociatedTokenAddressSync(mintAPubkey, publicKey);
       const userB = getAssociatedTokenAddressSync(mintBPubkey, publicKey);
 
       const tx = await program.methods
-        .swap(new BN(swapAmountIn), new BN(0), true) // Default A -> B, 0 min out
+        .swap(new BN(swapAmountIn).mul(FACTOR), new BN(0), isAToB)
         .accounts({
           user: publicKey,
           pool: poolAddress,
@@ -322,7 +345,7 @@ export default function Home() {
               <div className="text-right">
                 <p className="text-sm text-white/40 mb-1">Estimated Net Profit</p>
                 <p className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-green-400 to-emerald-500">
-                  +${(loanAmount * 0.003).toFixed(2)}
+                  +${(loanAmount * 0.003).toLocaleString(undefined, { minimumFractionDigits: 2 })}
                 </p>
               </div>
             </div>
@@ -364,7 +387,7 @@ export default function Home() {
               </div>
             </div>
             <div className="space-y-4">
-              <label className="text-sm font-medium text-white/60">Pay (Token A)</label>
+              <label className="text-sm font-medium text-white/60">Pay (Token {isAToB ? 'A' : 'B'})</label>
               <div className="relative">
                 <input 
                   type="number" value={swapAmountIn} onChange={(e) => setSwapAmountIn(Number(e.target.value))}
@@ -373,10 +396,15 @@ export default function Home() {
               </div>
             </div>
             <div className="flex justify-center -my-2 relaive z-30">
-              <div className="bg-black border border-white/10 rounded-full p-2 text-white/40"><ArrowRightLeft className="w-4 h-4 rotate-90" /></div>
+              <div 
+                className="bg-black border border-white/10 rounded-full p-2 text-white/40 cursor-pointer hover:bg-white/5 transition-colors" 
+                onClick={() => setIsAToB(!isAToB)}
+              >
+                <ArrowRightLeft className={`w-4 h-4 rotate-90 transition-transform duration-300 ${isAToB ? '' : 'rotate-[270deg]'}`} />
+              </div>
             </div>
             <div className="space-y-4">
-              <label className="text-sm font-medium text-white/60">Receive (Token B) - Estimate</label>
+              <label className="text-sm font-medium text-white/60">Receive (Token {isAToB ? 'B' : 'A'}) - Estimate</label>
               <div className="relative">
                 <input 
                   type="number" value={(swapAmountIn * 0.997).toFixed(2)} disabled
