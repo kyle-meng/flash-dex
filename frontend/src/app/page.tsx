@@ -52,6 +52,68 @@ export default function Home() {
   const [isExecuting, setIsExecuting] = useState(false);
   const [isAToB, setIsAToB] = useState(true);
   const [logs, setLogs] = useState<{ id: number; message: string; type: "info" | "success" | "error" }[]>([]);
+  const [poolReserves, setPoolReserves] = useState<{ reserveA: BN, reserveB: BN, feeBps: number } | null>(null);
+
+  useEffect(() => {
+    const fetchReserves = async () => {
+      if (!program || !mintA || !mintB || activeTab !== "swap") return;
+      try {
+        const mintAPubkey = new PublicKey(mintA);
+        const mintBPubkey = new PublicKey(mintB);
+        const [poolAddress] = PublicKey.findProgramAddressSync(
+          [Buffer.from("pool"), mintAPubkey.toBuffer(), mintBPubkey.toBuffer()],
+          program.programId
+        );
+
+        const [vaultA] = PublicKey.findProgramAddressSync(
+          [poolAddress.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mintAPubkey.toBuffer()],
+          ASSOCIATED_TOKEN_PROGRAM_ID
+        );
+        const [vaultB] = PublicKey.findProgramAddressSync(
+          [poolAddress.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mintBPubkey.toBuffer()],
+          ASSOCIATED_TOKEN_PROGRAM_ID
+        );
+
+        const [poolAcc, vaultAAcc, vaultBAcc] = await Promise.all([
+          program.account.pool.fetch(poolAddress),
+          getAccount(connection, vaultA),
+          getAccount(connection, vaultB)
+        ]);
+
+        setPoolReserves({
+          reserveA: new BN(vaultAAcc.amount.toString()),
+          reserveB: new BN(vaultBAcc.amount.toString()),
+          feeBps: poolAcc.feeBps,
+        });
+      } catch (e) {
+        setPoolReserves(null);
+      }
+    };
+
+    fetchReserves();
+    const interval = setInterval(fetchReserves, 5000);
+    return () => clearInterval(interval);
+  }, [program, connection, mintA, mintB, activeTab]);
+
+  const calculateEstimate = () => {
+    if (!poolReserves || swapAmountIn <= 0) return "0.00";
+    
+    const amountInBN = new BN(swapAmountIn).mul(FACTOR);
+    const { reserveA, reserveB, feeBps } = poolReserves;
+    
+    const [reserveIn, reserveOut] = isAToB ? [reserveA, reserveB] : [reserveB, reserveA];
+    
+    if (reserveIn.isZero() || reserveOut.isZero()) return "0.00";
+
+    const feeMultiplier = new BN(10000).sub(new BN(feeBps));
+    const amountInWithFee = amountInBN.mul(feeMultiplier);
+    
+    const numerator = amountInWithFee.mul(reserveOut);
+    const denominator = reserveIn.mul(new BN(10000)).add(amountInWithFee);
+    
+    const amountOutBN = numerator.div(denominator);
+    return (Number(amountOutBN.toString()) / Number(FACTOR.toString())).toFixed(2);
+  };
 
   const addLog = (message: string, type: "info" | "success" | "error" = "info") => {
     setLogs((prev) => [...prev, { id: Date.now() + Math.random(), message, type }]);
@@ -407,7 +469,7 @@ export default function Home() {
               <label className="text-sm font-medium text-white/60">Receive (Token {isAToB ? 'B' : 'A'}) - Estimate</label>
               <div className="relative">
                 <input 
-                  type="number" value={(swapAmountIn * 0.997).toFixed(2)} disabled
+                  type="number" value={calculateEstimate()} disabled
                   className="w-full bg-white/5 border border-white/5 rounded-2xl px-6 py-4 text-xl font-mono text-white/50 cursor-not-allowed"
                 />
               </div>
